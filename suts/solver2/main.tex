@@ -1,0 +1,139 @@
+\input{preamble}
+
+\begin{document}
+\coverpage{SAT-solver}
+  
+\section{Introduction}  
+We present a compact SAT-solver based on the DPLL algorithm, with non-chronological backtracking, learning, and a simple heuristic to choose variables. The solver was built from scratch following the same pattern as the one of MiniSat\footnote{Niklas Een, Niklas Sörensson. An Extensible SAT-solver. In International Conferences on Theory and Applications of Satisfiability Testing (SAT 2003)}, which provides high-level design guidelines for users building their own SAT solvers.
+  
+  \subsection{Solver overview}
+   The skeleton of the solver resembles the following one: \\
+   \begin{lstlisting}
+   int solve(V formula) {
+   		unsigned int varToDecide;
+    	staticVarOrder();
+    	while (true) {
+        	C conflictingClause = propagate();
+        	if (conflictingClause == NULL)
+            	if (allVarsAssigned()) return true; 
+                else decide(selectVar());	
+        	else {
+            	if (currentDecisionLevel() == 0) return false;
+            	V learntClauseVars = VECTORinit();
+            	int backtrackTo = analyze(conflictingClause, learntClauseVars);
+            	learn(learntClauseVars);
+            	cancelUntil(max(backtrackTo, rootLevel));
+        	}
+    	}
+	}
+	\end{lstlisting}
+    
+The formula with which the solver works is parsed from a DIMACS-encoded input file. During this phase, trivial conflicts as $(P \wedge \neg{P})$  are detected and reported by the parser. This simple trick---which is computationally cheap---allows us to return \textsc{Unsat} immediately for large yet trivially \textsc{Unsat} formulas. The parser is also responsible for initialising some variables, like \texttt{numberOfLiterals} and many others needed by the solver.
+    
+Before the solver's main loop starts, the variables are ordered via some simple heuristics we will be explaining in the next section. We then proceed to perform unit propagation. If no conflict is detected, a variable is hence picked for assignment. Otherwise, if all variables are already assigned, \textsc{Sat} can be returned. On the other hand, if a conflict is detected---and it is not a top-level one---it is then analyzed. A clause is learned based on it, and the solver backtracks to the latest possible level.
+    
+\subsection{Heuristic overview}
+The chosen heuristic process is a simple count over the existing clauses, which chooses the variable appearing in the highest number of clauses.
+    
+\newpage
+    
+\section{Algorithm design}
+Nowadays, most of the SAT solvers are \textit{conflict-based}, based on \textsc{Grasp}, \textsc{Chaff} and \textsc{Minisat}. We followed the same approach, as it is one of the most efficient and comprehensive for a first attempt to build our own SAT solver.
+    
+\subsection{Representation}
+\begin{multicols}{2}
+    \begin{lstlisting}
+        V cnf;
+        // --- Propagation
+        V *watchers;
+        V *undos;
+        Q propagationQ;
+        // --- Ordering
+        int *activity;
+        double var_inc;
+        double var_decay;
+        // --- Assignments
+        unsigned int numberOfLiterals;
+        unsigned int numberOfClauses;
+        bool *assignments;
+        V trail;
+        unsigned int *trail_lim;
+        unsigned int trail_lim_size;
+        Var lastAssignedVar;
+        bool lastAssignedValue;
+        // --- Backtrack and learning
+        C *reason;
+        int rootLevel;
+        V learnts;
+        Var lastDecisionUndone;
+        // --- Decision level
+        int *level;
+	\end{lstlisting}
+\columnbreak
+In order to implement our solver using the C programming language, additional data structures required careful implementation. Across the code, the following will be assumed:
+\begin{itemize}
+	\item \texttt{V} refers to a vector;
+    \item \texttt{Q} refers to a queue;
+    \item \texttt{bool} represents a boolean type;
+    \item \texttt{C} refers to a clause;
+    \item \texttt{Var} refers to a variable.
+\end{itemize}
+A \textsc{cnf} formula, for instance, is represented as a vector of clauses, where each clause contains variables.
+
+Additionally, several arrays are used to keep track of assignments, trails of assignments, activities of variables, reasons for assignments and so on and so forth. These data structures consume extra space, although allow for a more efficient implementation.
+\end{multicols}
+    
+\subsection{Inference}
+The only inference mechanism used in our solver is \textit{unit propagation}. This means that when all the literals of a clause except for one are set to \texttt{false}, the latter is then set to \texttt{true}, which may cause other clauses to become unit. This mechanism continues until there are no more unit clauses to propagate. This has been implemented in the function \texttt{propagate()}.
+
+To optimise this process, we followed the approach taken by \textsc{Chaff}\footnote{Matthew W. Moskewicz, Conor F. Madigan, Ying Zhao, Lintao Zhang, and Sharad Malik. Chaff: engineering an efficient SAT solver. In Design Automation Conference (DAC 2001)}: for each literal, a vector of clauses that may propagate unit information is kept; in each of these clauses, two unbound literals---\texttt{p} and \texttt{q}---are kept; if both of them are unbound, then the clause is not unit; if only one of them is unbound, we then iterate through the remaining literals of the clause to pick another unbound one. If we cannot find it, this means that the clause is now unit.
+
+This mechanism is commonly referred to as \textit{watch literals}. Assuming a regular input, a solver spends most of its time propagating information. Therefore, implementing \textit{watch literals} was as a key factor in improving efficiency.
+    
+\subsection{Learning and backtracking}
+The learning and backtracking strategies implemented in the solver are an implementation of the ones presented in \textsc{Grasp}\footnote{João P. Marques Silva, Karem A. Sakallah. GRASP—-a new search algorithm for satisfiability. International Conference on Computer-Aided Design (DAC 1996)}. The corresponding functions are \texttt{analyze()} and \texttt{learn()}).
+    
+When a clause is impossible to satisfy under the assignments in course, we go through the clauses that were the reason to propagate to the conflict in a BFS manner. When we reach the lowest decision level for which the conflict clause is unit, then that latter is added to the database and the assignments until that point are canceled by \texttt{cancelUntil()}. This is commonly referred to as \textit{non-chronological backtracking}.
+    
+\subsection{Activity heuristics}
+The heuristic implemented to decide which new variables to assign is described in this section.
+
+An array \texttt{int* activity} is kept, and for each variable---indexed by \texttt{id}---the number of unsolved clauses where it appears is saved. This simple approach should slightly help improve the quality of the decisions. Unfortunately, due to time constraints, we were not able to implement this carefully (which means maintaining a queue where the next variable to get is the one to be assigned, and also updating the queue for every propagation). The cost of maintaining this information turned out to be to too large, and our heuristics decreased the performance of the solver. For this reason, in the delivered version of our SAT solver this heuristics is commented out. Variables are hence selected only by ascending \texttt{id} order.
+    
+\section{Difficulties and next steps}
+Due to time constraints, the performance of the solver is still sub-optimal. For large enough inputs, the result is not given in a reasonable amount of time. Possible improvements could be a careful implementation of the DLIS heuristics, learned clauses removal and migrating data structures from the heap to the stack.
+
+Implementing the SAT solver in the C programming language also meant that more time was spent implementing appropriate data structures and solving various memory issues.
+    
+\section{Testing}
+In this section the methods we used to test our code are described.
+
+We ran \textsc{ASan}, \textsc{MSan} and \textsc{UBSan}, as well as \textsc{Valgrind} to guarantee the healthiness of the solver's code. Although some memory leaks currently still exist, those are taken care of by the operating system when the process terminates.
+
+During the development process, both \textsc{ASan} and \textsc{Valgrind} were able to catch some off-by-one overflows that did not have a visible impact on the result produced by the solver in the test cases we ran. Nevertheless, it could happen that some inputs made use of this undefined behavior to produce wrong results.
+
+Additionally, a script \texttt{compare.py} was created to perform differential testing between our SAT solver and \textsc{MiniSat}. Having assumed the correctness of \textsc{MiniSat}, our results were guaranteed to be correct if they were deemed correct by \texttt{compare.py}.
+    
+\section{Branches}
+\subsection{Funcerr}
+In order to create a functional error in the solver, the \texttt{selectVar()} function was modified to resemble the following:
+    \begin{lstlisting}
+    unsigned int selectVar() {  
+      for (unsigned int id = 1; id < numberOfLiterals; id++) 
+          if (assignments[id] == unassigned) return id;
+      return 0;
+  	}
+ 	\end{lstlisting}
+
+The modified version iterates while \texttt{id < numberOfLiterals} instead of \texttt{id <= numberOfLiterals}. Ultimately, if the value of the last variable was not propagated, the solver would return \textsc{Unsat}, as demonstrated through the test case \texttt{funcerr.cnf}.
+    
+\section{Undef}
+The undefined behaviour we added to our code is related to a buffer underflow. During conflict analysis, the \texttt{analyze} function backtracks, undoing the last decisions and expanding the reasoning for them. This leads to the creation of a conflict clause. The process goes on until there is just one unexpanded literal in the current decision level. This heuristic is called \textit{First Unique Implication Point} and has been shown to be effective\footnote{L. Zhang, C.F. Madigan, M.W. Moskewicz, S. Malik. Efficent Conflict Driven Learning in Boolean Satisfiability Solver" in Proc. of the International Conference on Computer Aided Design (ICCAD), 2001}.
+
+The data structure containing the assigned literals in a chronological order is a queue called \texttt{trail}. The \texttt{analyze} function backtracks on this structure by iteratively calling the \texttt{undoOne}function which in turns calls \texttt{pop} on the trail.
+
+The undefined behaviour has been introduced by pretending we did not know that, hence by adding an additional call to \texttt{pop} on the trail near the call to \texttt{undoOne}. This means that two elements are extracted from the trail.
+
+In the case of a top-level conflict, the underflow is avoided as the solver exits printing \texttt{Unsat} before the \texttt{analyze} function can be called. In the case of a deeper conflict, the trail is usually filled up enough to avoid the underflow. However, as can be observed in the test case \texttt{tests/unsat.cnf}, in a level-1 conflict the trail underflows and the program terminates with a segmentation fault. This fault is caught both by \textsc{ASan} and \textsc{UBSan}.
+    
+\end{document}

@@ -1,0 +1,3 @@
+c Simple satisfiable query with multiple models
+p cnf 2 1
+1 2 0
